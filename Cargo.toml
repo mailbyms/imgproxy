@@ -1,0 +1,26 @@
+[package]
+name = "imgproxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web 框架 - 现代异步框架
+axum = "0.7"
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+# HTTP 客户端
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+# 图片处理库
+image = { version = "0.25", features = ["jpeg", "png", "webp"] }
+# PNG 编码器（支持调色板）
+png = "0.17"
+# URL 解析
+url = "2.5"
+# 序列化/反序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 环境变量解析
+dotenv = "0.15"
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
