@@ -77,7 +77,7 @@ async fn proxy_handler(
 
     // 解析宽度参数
     let width_str = parts[0];
-    let target_url = parts[1];
+    let mut target_url = parts[1].to_string();
 
     let target_width: u32 = match width_str.parse() {
         Ok(w) => w,
@@ -94,10 +94,19 @@ async fn proxy_handler(
         );
     }
 
+    // 修复 nginx 转发时可能被"吃掉"的斜杠 (https:// -> https:/)
+    if target_url.starts_with("https:/") && !target_url.starts_with("https://") {
+        target_url = target_url.replacen("https:/", "https://", 1);
+        info!("🔧 修复 URL: {}", target_url);
+    } else if target_url.starts_with("http:/") && !target_url.starts_with("http://") {
+        target_url = target_url.replacen("http:/", "http://", 1);
+        info!("🔧 修复 URL: {}", target_url);
+    }
+
     info!("📥 代理请求: 宽度={} URL={}", target_width, target_url);
 
     // 下载原始图片
-    let original_bytes = match download_image(target_url).await {
+    let original_bytes = match download_image(&target_url).await {
         Ok(bytes) => bytes,
         Err(status) => return error_response(status, "下载图片失败"),
     };
