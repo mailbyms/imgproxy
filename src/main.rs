@@ -102,31 +102,31 @@ async fn proxy_handler(
         Err(status) => return error_response(status, "下载图片失败"),
     };
 
-    // 加载图片（保留颜色类型信息）
+    // 获取图片尺寸（轻量级操作，不完全解码）
+    let (orig_width, orig_height, format) = match get_image_dimensions(&original_bytes) {
+        Ok(dims) => dims,
+        Err(status) => return error_response(status, "图片格式不支持"),
+    };
+
+    // 如果原图宽度 ≤ 目标宽度，直接返回原始数据
+    if orig_width <= target_width {
+        info!("📐 原始尺寸: {}x{} ≤ 目标宽度 {}, 直接返回原图", orig_width, orig_height, target_width);
+        return build_original_response(original_bytes, format);
+    }
+
+    // 需要缩放，加载完整图片数据
     let image_data = match load_image(&original_bytes) {
         Ok(data) => data,
         Err(status) => return error_response(status, "图片解析失败"),
     };
 
     // 计算缩放尺寸
-    let (orig_width, orig_height) = image_data.img.dimensions();
-    let new_width = target_width;
-    let new_height = if orig_width > target_width {
-        // 等比例缩放
-        (orig_height as f64 * target_width as f64 / orig_width as f64) as u32
-    } else {
-        // 原图宽度小于目标宽度，保持原尺寸
-        orig_height
-    };
+    let new_height = (orig_height as f64 * target_width as f64 / orig_width as f64) as u32;
 
-    info!("📐 原始尺寸: {}x{} -> 缩放后: {}x{}", orig_width, orig_height, new_width, new_height);
+    info!("📐 原始尺寸: {}x{} -> 输出尺寸: {}x{}", orig_width, orig_height, target_width, new_height);
 
     // 执行缩放
-    let resized = if new_width < orig_width {
-        image_data.img.resize(new_width, new_height, FilterType::Lanczos3)
-    } else {
-        image_data.img // 无需缩放
-    };
+    let resized = image_data.img.resize(target_width, new_height, FilterType::Lanczos3);
 
     // 编码图片
     let mut buffer = Vec::new();
@@ -398,10 +398,9 @@ fn load_image(bytes: &[u8]) -> Result<ImageWithData, StatusCode> {
     };
 
     // 检测图片格式
-    let format = image::ImageFormat::from_path("test.png")  // 用于检测格式
-        .or_else(|_| image::ImageReader::new(Cursor::new(bytes))
-            .with_guessed_format()
-            .map(|r| r.format().unwrap_or(image::ImageFormat::Jpeg)))
+    let format = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map(|r| r.format().unwrap_or(image::ImageFormat::Jpeg))
         .unwrap_or(image::ImageFormat::Jpeg);
 
     // 解码图片
@@ -425,6 +424,44 @@ fn load_image(bytes: &[u8]) -> Result<ImageWithData, StatusCode> {
         has_palette,
         original_palette,
     })
+}
+
+/// 轻量级获取图片尺寸（不完全解码）
+fn get_image_dimensions(bytes: &[u8]) -> Result<(u32, u32, image::ImageFormat), StatusCode> {
+    use image::ImageReader;
+
+    // 检测图片格式并获取尺寸
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| StatusCode::UNSUPPORTED_MEDIA_TYPE)?;
+
+    let format = reader.format().ok_or(StatusCode::UNSUPPORTED_MEDIA_TYPE)?;
+    let dimensions = reader.into_dimensions().map_err(|_| StatusCode::UNSUPPORTED_MEDIA_TYPE)?;
+
+    Ok((dimensions.0, dimensions.1, format))
+}
+
+/// 构建原始图片响应（直接返回原始数据）
+fn build_original_response(bytes: Vec<u8>, format: image::ImageFormat) -> Response {
+    let content_type = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        _ => "image/jpeg",
+    };
+
+    info!("✅ 直接返回原图: {} 字节", bytes.len());
+
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        content_type.parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "public, max-age=31536000, immutable".parse().unwrap(),
+    );
+
+    response
 }
 
 /// 构建错误响应
