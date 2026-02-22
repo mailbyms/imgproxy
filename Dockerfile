@@ -1,5 +1,5 @@
 # 多阶段构建 - 编译阶段
-FROM rust:1.85-alpine AS builder
+FROM rust:1.88.0-alpine AS builder
 
 # 安装编译依赖
 RUN apk add --no-cache musl-dev
