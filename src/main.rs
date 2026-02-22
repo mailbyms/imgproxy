@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     Router,
 };
-use image::{imageops::FilterType, GenericImageView, ImageEncoder, DynamicImage, ColorType};
+use image::{imageops::FilterType, ImageEncoder, DynamicImage, ColorType};
 use std::io::Cursor;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -108,30 +108,28 @@ async fn proxy_handler(
         Err(status) => return error_response(status, "图片格式不支持"),
     };
 
-    // 如果原图宽度 ≤ 目标宽度，直接返回原始数据
-    if orig_width <= target_width {
-        info!("📐 原始尺寸: {}x{} ≤ 目标宽度 {}, 直接返回原图", orig_width, orig_height, target_width);
-        return build_original_response(original_bytes, format);
-    }
-
-    // 需要缩放，加载完整图片数据
+    // 加载完整图片数据
     let image_data = match load_image(&original_bytes) {
         Ok(data) => data,
         Err(status) => return error_response(status, "图片解析失败"),
     };
 
-    // 计算缩放尺寸
-    let new_height = (orig_height as f64 * target_width as f64 / orig_width as f64) as u32;
-
-    info!("📐 原始尺寸: {}x{} -> 输出尺寸: {}x{}", orig_width, orig_height, target_width, new_height);
-
-    // 执行缩放
-    let resized = image_data.img.resize(target_width, new_height, FilterType::Lanczos3);
+    // 决定是否需要缩放
+    let (resized, output_width, output_height) = if orig_width > target_width {
+        // 需要缩放
+        let new_height = (orig_height as f64 * target_width as f64 / orig_width as f64) as u32;
+        info!("📐 原始尺寸: {}x{} -> 输出尺寸: {}x{} (缩放)", orig_width, orig_height, target_width, new_height);
+        (image_data.img.resize(target_width, new_height, FilterType::Lanczos3), target_width, new_height)
+    } else {
+        // 不需要缩放，保持原尺寸
+        info!("📐 原始尺寸: {}x{} -> 输出尺寸: {}x{} (重编码)", orig_width, orig_height, orig_width, orig_height);
+        (image_data.img, orig_width, orig_height)
+    };
 
     // 编码图片
     let mut buffer = Vec::new();
-    let width = resized.width();
-    let height = resized.height();
+    let width = output_width;
+    let height = output_height;
 
     // 根据原始颜色类型选择编码方式
     let encode_result = match image_data.original_format {
@@ -284,16 +282,36 @@ async fn proxy_handler(
         return error_response(StatusCode::INTERNAL_SERVER_ERROR, "图片编码失败");
     }
 
-    info!("✅ 处理完成: 输出大小 {} 字节", buffer.len());
+    info!("✅ 重编码完成: {} 字节 (原图: {} 字节)", buffer.len(), original_bytes.len());
 
-    // 构建响应
-    let content_type = match image_data.original_format {
-        image::ImageFormat::Png => "image/png",
-        _ => "image/jpeg",
+    // 保存大小信息（避免移动后无法访问）
+    let original_size = original_bytes.len();
+    let encoded_size = buffer.len();
+    let use_original = encoded_size >= original_size;
+
+    // 比较原始文件和重编码后文件的大小，返回较小的
+    let (response_bytes, content_type) = if use_original {
+        info!("📦 原图更小或相等，使用原始版本 ({} KB vs {} KB)",
+            original_size / 1024, encoded_size / 1024);
+        (original_bytes, match format {
+            image::ImageFormat::Png => "image/png",
+            image::ImageFormat::Jpeg => "image/jpeg",
+            _ => "image/jpeg",
+        })
+    } else {
+        info!("📦 重编码更小，使用重编码版本 ({} KB vs {} KB)",
+            encoded_size / 1024, original_size / 1024);
+        (buffer, match image_data.original_format {
+            image::ImageFormat::Png => "image/png",
+            _ => "image/jpeg",
+        })
     };
 
-    // 设置缓存头
-    let mut response = Response::new(Body::from(buffer));
+    // 实际输出大小
+    let output_size = response_bytes.len();
+
+    // 构建响应
+    let mut response = Response::new(Body::from(response_bytes));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         content_type.parse().unwrap(),
@@ -301,6 +319,24 @@ async fn proxy_handler(
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         "public, max-age=31536000, immutable".parse().unwrap(),
+    );
+
+    // 添加图片处理信息头部
+    response.headers_mut().insert(
+        "X-Original-Dimensions",
+        format!("{}x{}", orig_width, orig_height).parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        "X-Original-Size",
+        original_size.to_string().parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        "X-Output-Dimensions",
+        format!("{}x{}", output_width, output_height).parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        "X-Output-Size",
+        output_size.to_string().parse().unwrap(),
     );
 
     // 转发 ETag 如果存在
@@ -439,29 +475,6 @@ fn get_image_dimensions(bytes: &[u8]) -> Result<(u32, u32, image::ImageFormat), 
     let dimensions = reader.into_dimensions().map_err(|_| StatusCode::UNSUPPORTED_MEDIA_TYPE)?;
 
     Ok((dimensions.0, dimensions.1, format))
-}
-
-/// 构建原始图片响应（直接返回原始数据）
-fn build_original_response(bytes: Vec<u8>, format: image::ImageFormat) -> Response {
-    let content_type = match format {
-        image::ImageFormat::Png => "image/png",
-        image::ImageFormat::Jpeg => "image/jpeg",
-        _ => "image/jpeg",
-    };
-
-    info!("✅ 直接返回原图: {} 字节", bytes.len());
-
-    let mut response = Response::new(Body::from(bytes));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        content_type.parse().unwrap(),
-    );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        "public, max-age=31536000, immutable".parse().unwrap(),
-    );
-
-    response
 }
 
 /// 构建错误响应

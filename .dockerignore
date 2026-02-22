@@ -1,0 +1,8 @@
+target
+**/*.rs.bk
+.DS_Store
+.git
+.gitignore
+*.md
+.vscode
+.idea

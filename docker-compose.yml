@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  imgproxy:
+    build: .
+    image: mailbyms/imgproxy:latest
+    container_name: imgproxy
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - BIND_ADDRESS=0.0.0.0:3000
+      - RUST_LOG=info
+    # 资源限制（可选）
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 128M
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
