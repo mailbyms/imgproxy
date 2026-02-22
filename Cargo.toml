@@ -23,4 +23,6 @@ serde_json = "1"
 dotenv = "0.15"
 # 日志
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "local-time"] }
+# 时间处理
+chrono = "0.4"

@@ -10,11 +10,33 @@ use std::io::Cursor;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
+use tracing_subscriber::fmt::time::FormatTime;
+use chrono::{Datelike, Local, Timelike};
 
 // 代理配置
 const MAX_WIDTH: u32 = 2000;      // 最大宽度限制
 const DOWNLOAD_TIMEOUT: u64 = 30; // 下载超时(秒)
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 最大文件大小 10MB
+
+// 自定义时间格式化器
+struct LocalTime;
+
+impl FormatTime for LocalTime {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        let now = Local::now();
+        write!(
+            w,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+            now.year(),
+            now.month(),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second(),
+            now.timestamp_subsec_millis(),
+        )
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -24,6 +46,7 @@ async fn main() {
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing::Level::INFO.into()),
         )
+        .with_timer(LocalTime)
         .init();
 
     // 获取监听地址
