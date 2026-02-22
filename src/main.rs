@@ -147,21 +147,22 @@ async fn proxy_handler(
     };
 
     // 决定是否需要缩放
-    let (resized, output_width, output_height) = if orig_width > target_width {
+    let resized = if orig_width > target_width {
         // 需要缩放
         let new_height = (orig_height as f64 * target_width as f64 / orig_width as f64) as u32;
         info!("📐 原始尺寸: {}x{} -> 输出尺寸: {}x{} (缩放)", orig_width, orig_height, target_width, new_height);
-        (image_data.img.resize(target_width, new_height, FilterType::Lanczos3), target_width, new_height)
+        image_data.img.resize(target_width, new_height, FilterType::Lanczos3)
     } else {
         // 不需要缩放，保持原尺寸
         info!("📐 原始尺寸: {}x{} -> 输出尺寸: {}x{} (重编码)", orig_width, orig_height, orig_width, orig_height);
-        (image_data.img, orig_width, orig_height)
+        image_data.img
     };
 
     // 编码图片
     let mut buffer = Vec::new();
-    let width = output_width;
-    let height = output_height;
+    // 使用实际图片尺寸（避免 resize 返回不同尺寸的问题）
+    let width = resized.width();
+    let height = resized.height();
 
     // 根据原始颜色类型选择编码方式
     let encode_result = match image_data.original_format {
@@ -296,12 +297,22 @@ async fn proxy_handler(
         _ => {
             // JPEG 格式（只能使用 RGB8）
             let rgb_img = resized.to_rgb8();
+            let pixels = rgb_img.as_raw();
+
+            // 验证 buffer 大小（image crate 0.25 某些情况可能有 padding 问题）
+            let expected_size = (width * height * 3) as usize;
+            if pixels.len() != expected_size {
+                error!("JPEG 编码: buffer 大小不匹配，预期 {} 实际 {} ({}x{})",
+                    expected_size, pixels.len(), width, height);
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, "图片数据异常");
+            }
+
             let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
                 std::io::Cursor::new(&mut buffer),
                 85,
             );
             encoder.write_image(
-                rgb_img.as_raw(),
+                pixels,
                 width,
                 height,
                 image::ExtendedColorType::Rgb8,
@@ -364,7 +375,7 @@ async fn proxy_handler(
     );
     response.headers_mut().insert(
         "X-Output-Dimensions",
-        format!("{}x{}", output_width, output_height).parse().unwrap(),
+        format!("{}x{}", width, height).parse().unwrap(),
     );
     response.headers_mut().insert(
         "X-Output-Size",
