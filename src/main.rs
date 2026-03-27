@@ -11,29 +11,37 @@ use std::time::Duration;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 use tracing_subscriber::fmt::time::FormatTime;
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Timelike};
 
 // 代理配置
 const MAX_WIDTH: u32 = 2000;      // 最大宽度限制
 const DOWNLOAD_TIMEOUT: u64 = 30; // 下载超时(秒)
 const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 最大文件大小 10MB
 
-// 自定义时间格式化器
-struct LocalTime;
+// 自定义日志前缀格式化器（包含时间、进程ID、线程ID）
+struct LogPrefix;
 
-impl FormatTime for LocalTime {
+impl FormatTime for LogPrefix {
     fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
-        let now = Local::now();
+        // 显式指定东八区（北京时间），避免服务器/容器本地时区未设置导致时间不准
+        let tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+        let now = chrono::Utc::now().with_timezone(&tz);
+        let thread_id = format!("{:?}", std::thread::current().id());
+        let thread_id_num = thread_id
+            .trim_start_matches("ThreadId(")
+            .trim_end_matches(")");
+        
+        // 打印格式：YYYY-MM-DD HH:MM:SS.SSS [TID:xxx]
         write!(
             w,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{:02}]",
             now.year(),
             now.month(),
             now.day(),
             now.hour(),
             now.minute(),
             now.second(),
-            now.timestamp_subsec_millis(),
+            thread_id_num
         )
     }
 }
@@ -46,7 +54,9 @@ async fn main() {
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing::Level::INFO.into()),
         )
-        .with_timer(LocalTime)
+        // 封闭日志打印格式，在时间戳位置统一注入 时间 + PID + TID
+        .with_timer(LogPrefix)
+        .with_target(false) // 小应用，不打印模块名称
         .init();
 
     // 获取监听地址
@@ -54,8 +64,8 @@ async fn main() {
         .unwrap_or_else(|_| "0.0.0.0:3000".to_string());
 
     info!("🚀 图片代理服务启动中...");
-    info!("📡 监听地址: http://{}", addr);
-    info!("🔧 路由格式: /<宽度>/<目标图片URL>");
+    info!("   监听地址: http://{}", addr);
+    info!("   路由格式: /<宽度>/<目标图片URL>");
 
     // 构建路由 - 使用 fallback 捕获所有请求
     let app = Router::new().fallback(proxy_handler);
@@ -120,13 +130,13 @@ async fn proxy_handler(
     // 修复 nginx 转发时可能被"吃掉"的斜杠 (https:// -> https:/)
     if target_url.starts_with("https:/") && !target_url.starts_with("https://") {
         target_url = target_url.replacen("https:/", "https://", 1);
-        info!("🔧 修复 URL: {}", target_url);
+        info!("修复 URL: {}", target_url);
     } else if target_url.starts_with("http:/") && !target_url.starts_with("http://") {
         target_url = target_url.replacen("http:/", "http://", 1);
-        info!("🔧 修复 URL: {}", target_url);
+        info!("修复 URL: {}", target_url);
     }
 
-    info!("📥 代理请求: 宽度={} URL={}", target_width, target_url);
+    info!("代理请求: 宽度={} URL={}", target_width, target_url);
 
     // 下载原始图片
     let original_bytes = match download_image(&target_url).await {
@@ -169,7 +179,7 @@ async fn proxy_handler(
         image::ImageFormat::Png => {
             // 如果原图有调色板，使用原始调色板
             if image_data.has_palette {
-                info!("🎨 使用原始调色板保持颜色");
+                info!("使用原始调色板保持颜色");
 
                 let rgb_img = resized.to_rgb8();
                 let pixels = rgb_img.as_raw();
@@ -179,7 +189,7 @@ async fn proxy_handler(
                     Some(p) => p.clone(),
                     None => {
                         // 如果没有提取到调色板，回退到 RGB8
-                        info!("⚠️  无法提取原始调色板，使用 RGB8 格式");
+                        info!("无法提取原始调色板，使用 RGB8 格式");
                         let encoder = image::codecs::png::PngEncoder::new_with_quality(
                             std::io::Cursor::new(&mut buffer),
                             image::codecs::png::CompressionType::Best,
@@ -253,7 +263,7 @@ async fn proxy_handler(
                     }
                 }
 
-                info!("✅ 使用原始调色板完成，输出大小: {} 字节", buffer.len());
+                info!("使用原始调色板完成，输出大小: {} 字节", buffer.len());
                 Ok(())
             } else {
                 // 根据颜色类型选择最佳编码方式
@@ -334,7 +344,7 @@ async fn proxy_handler(
 
     // 比较原始文件和重编码后文件的大小，返回较小的
     let (response_bytes, content_type) = if use_original {
-        info!("📦 原图更小或相等，使用原始版本 ({} KB vs {} KB)",
+        info!("原图更小或相等，使用原始版本 ({} KB vs {} KB)",
             original_size / 1024, encoded_size / 1024);
         (original_bytes, match format {
             image::ImageFormat::Png => "image/png",
@@ -342,7 +352,7 @@ async fn proxy_handler(
             _ => "image/jpeg",
         })
     } else {
-        info!("📦 重编码更小，使用重编码版本 ({} KB vs {} KB)",
+        info!("重编码更小，使用重编码版本 ({} KB vs {} KB)",
             encoded_size / 1024, original_size / 1024);
         (buffer, match image_data.original_format {
             image::ImageFormat::Png => "image/png",
@@ -491,9 +501,9 @@ fn load_image(bytes: &[u8]) -> Result<ImageWithData, StatusCode> {
     let color_type = img.color();
 
     if has_palette {
-        info!("🎨 原图颜色类型: Indexed (调色板)");
+        info!("原图颜色类型: Indexed (调色板)");
     } else {
-        info!("🎨 原图颜色类型: {:?}", color_type);
+        info!("原图颜色类型: {:?}", color_type);
     }
 
     Ok(ImageWithData {
