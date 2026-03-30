@@ -16,7 +16,7 @@ use chrono::{Datelike, Timelike};
 // 代理配置
 const MAX_WIDTH: u32 = 2000;      // 最大宽度限制
 const DOWNLOAD_TIMEOUT: u64 = 30; // 下载超时(秒)
-const MAX_FILE_SIZE: usize = 10 * 1024 * 1024; // 最大文件大小 10MB
+const MAX_FILE_SIZE: usize = 20 * 1024 * 1024; // 最大文件大小 20MB
 
 // 自定义日志前缀格式化器（包含时间、进程ID、线程ID）
 struct LogPrefix;
