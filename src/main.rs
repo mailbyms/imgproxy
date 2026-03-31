@@ -15,8 +15,7 @@ use chrono::{Datelike, Timelike};
 
 // 代理配置
 const MAX_WIDTH: u32 = 2000;      // 最大宽度限制
-const DOWNLOAD_TIMEOUT: u64 = 30; // 下载超时(秒)
-const MAX_FILE_SIZE: usize = 20 * 1024 * 1024; // 最大文件大小 20MB
+const DOWNLOAD_TIMEOUT: u64 = 15; // 下载超时(秒)
 
 // 自定义日志前缀格式化器（包含时间、进程ID、线程ID）
 struct LogPrefix;
@@ -433,24 +432,12 @@ async fn download_image(url: &str) -> Result<Vec<u8>, StatusCode> {
         return Err(StatusCode::BAD_GATEWAY);
     }
 
-    // 检查内容长度
-    if let Some(len) = response.content_length() {
-        if len > MAX_FILE_SIZE as u64 {
-            warn!("文件过大: {} 字节", len);
-            return Err(StatusCode::PAYLOAD_TOO_LARGE);
-        }
-    }
-
-    // 限制下载大小
+    // 限制下载大小（基于下载时间超时）
     let bytes = response
         .bytes()
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?
         .to_vec();
-
-    if bytes.len() > MAX_FILE_SIZE {
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
 
     Ok(bytes)
 }
