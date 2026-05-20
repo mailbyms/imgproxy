@@ -41,12 +41,12 @@ COPY --from=builder /app/target/release/imgproxy .
 RUN chown imgproxy:imgproxy imgproxy
 USER imgproxy
 
-# 环境变量配置
-ENV BIND_ADDRESS=0.0.0.0:3000
+# 环境变量配置，同时支持ipv4和ipv6地址绑定
+ENV BIND_ADDRESS=[::]:3000
 EXPOSE 3000
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
 ENTRYPOINT ["./imgproxy"]

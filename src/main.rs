@@ -60,14 +60,16 @@ async fn main() {
 
     // 获取监听地址
     let addr = std::env::var("BIND_ADDRESS")
-        .unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+        .unwrap_or_else(|_| "[::]:3000".to_string());
 
     info!("🚀 图片代理服务启动中...");
     info!("   监听地址: http://{}", addr);
     info!("   路由格式: /<宽度>/<目标图片URL>");
 
-    // 构建路由 - 使用 fallback 捕获所有请求
-    let app = Router::new().fallback(proxy_handler);
+    // 构建路由 - 健康检查端点 + fallback 捕获所有请求
+    let app = Router::new()
+        .route("/health", axum::routing::get(health_handler))
+        .fallback(proxy_handler);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -76,6 +78,11 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("服务器启动失败");
+}
+
+/// 健康检查处理器
+async fn health_handler() -> Response {
+    (StatusCode::OK, "OK").into_response()
 }
 
 /// 图片代理处理器 - 手动解析路径
