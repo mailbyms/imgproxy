@@ -50,8 +50,7 @@ async fn main() {
     // 初始化日志
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
+            tracing_subscriber::EnvFilter::from_default_env(),
         )
         // 封闭日志打印格式，在时间戳位置统一注入 时间 + PID + TID
         .with_timer(LogPrefix)
